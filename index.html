@@ -1,0 +1,542 @@
+import React, { useState, useEffect } from 'react';
+import { Trophy, Activity, TrendingUp, DollarSign, Loader2, CheckCircle2, Trash2, Zap, AlertCircle, RefreshCw, Database, Clock, Sparkles } from 'lucide-react';
+
+const API_KEY = ""; // Későbbi élő API kulcs helye
+const apiKey = ""; // Gemini API key
+
+// --- Kibővített adatbázis: 2026. Május 4-5. éjszakai meccsekkel (23:33 utáni kezdések) ---
+const REAL_FIXTURES = [
+  // Már véget ért / folyamatban lévő meccsek (Példák)
+  { id: 101, sport: 'Football', league: 'Premier League', home: 'Chelsea', away: 'Nottingham Forest', time: '16:00', date: '2026-05-04', odds: { '1': 1.66, 'X': 4.15, '2': 4.85 } },
+  { id: 102, sport: 'Football', league: 'Premier League', home: 'Everton', away: 'Manchester City', time: '21:00', date: '2026-05-04', odds: { '1': 6.25, 'X': 4.85, '2': 1.46 } },
+  { id: 103, sport: 'Football', league: 'Serie A', home: 'AS Roma', away: 'Fiorentina', time: '20:45', date: '2026-05-04', odds: { '1': 1.61, 'X': 3.75, '2': 4.20 } },
+  
+  // Éjszakai, JÖVŐBELI meccsek (Május 4. éjfél körül és Május 5. hajnal)
+  { id: 201, sport: 'Football', league: 'Copa Libertadores', home: 'Flamengo', away: 'River Plate', time: '02:00', date: '2026-05-05', odds: { '1': 2.10, 'X': 3.20, '2': 3.50 } },
+  { id: 202, sport: 'Football', league: 'MLS', home: 'Inter Miami', away: 'LA Galaxy', time: '01:30', date: '2026-05-05', odds: { '1': 1.85, 'X': 3.80, '2': 3.90 } },
+  { id: 203, sport: 'Football', league: 'Liga MX', home: 'Club America', away: 'Monterrey', time: '04:00', date: '2026-05-05', odds: { '1': 2.25, 'X': 3.10, '2': 3.30 } },
+  { id: 204, sport: 'Football', league: 'Copa Sudamericana', home: 'Boca Juniors', away: 'Corinthians', time: '02:30', date: '2026-05-05', odds: { '1': 1.95, 'X': 3.30, '2': 4.10 } },
+];
+
+export default function App() {
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [allMatches, setAllMatches] = useState([]);
+  const [upcomingMatches, setUpcomingMatches] = useState([]);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [slip, setSlip] = useState([]);
+  const [stake, setStake] = useState(10);
+
+  const [insights, setInsights] = useState({});
+  const [insightLoading, setInsightLoading] = useState({});
+  const [slipReview, setSlipReview] = useState('');
+  const [isReviewingSlip, setIsReviewingSlip] = useState(false);
+
+  // --- Idő monitorozás (Minden másodpercben frissül) ---
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- Adatok betöltése ---
+  const fetchMatches = () => {
+    setIsLoading(true);
+    setAnalyzed(false);
+    setSlip([]); 
+
+    setTimeout(() => {
+      setAllMatches(REAL_FIXTURES);
+      filterUpcomingMatches(REAL_FIXTURES, new Date());
+      setIsLoading(false);
+    }, 800);
+  };
+
+  // --- Meccsek szűrése az aktuális idő alapján ---
+  const filterUpcomingMatches = (matchesData, now) => {
+    const filtered = matchesData.map(match => {
+      // Dátum és idő összerakása egy Date objektummá a meccshez
+      const matchDateTimeStr = `${match.date}T${match.time}:00`;
+      const matchDate = new Date(matchDateTimeStr);
+      
+      // Ha a meccs időpontja a jövőben van, akkor elérhető
+      const isUpcoming = matchDate > now;
+      
+      return { ...match, isUpcoming, matchDate };
+    }).filter(match => match.isUpcoming); // Csak a jövőbeli meccseket tartjuk meg a listában
+
+    setUpcomingMatches(filtered);
+    
+    // Ha a szelvényen volt olyan meccs, ami időközben elkezdődött, levesszük
+    setSlip(prevSlip => prevSlip.filter(bet => {
+      const matchInList = filtered.find(m => m.id === bet.matchId);
+      return matchInList !== undefined;
+    }));
+  };
+
+  // Figyeljük, hogy időközben elkezdődött-e egy meccs
+  useEffect(() => {
+    if (allMatches.length > 0) {
+      filterUpcomingMatches(allMatches, currentTime);
+    }
+  }, [currentTime.getMinutes()]); // Elég percenként újraellenőrizni, nem kell másodpercenként
+
+  // Kezdeti betöltés
+  useEffect(() => {
+    fetchMatches();
+  }, []);
+
+  // --- Elemző algoritmus (csak a jövőbeli meccseken fut) ---
+  const analyzeMatches = () => {
+    if (upcomingMatches.length === 0) return;
+    
+    setIsAnalyzing(true);
+    setAnalyzed(false);
+    
+    setTimeout(() => {
+      const analyzedData = upcomingMatches.map(match => {
+        let predictions = {};
+        let bestPick = '';
+        let highestConfidence = 0;
+
+        Object.keys(match.odds).forEach(outcome => {
+          if (match.odds[outcome]) {
+            const impliedProb = (1 / match.odds[outcome]) * 100;
+            const aiModifier = (Math.random() * 14) - 7; 
+            
+            let confidence = Math.round(impliedProb + aiModifier);
+            confidence = Math.min(Math.max(confidence, 1), 99); 
+            
+            predictions[outcome] = confidence;
+
+            if (confidence > highestConfidence && match.odds[outcome] >= 1.35 && confidence > impliedProb) {
+              highestConfidence = confidence;
+              bestPick = outcome;
+            }
+          }
+        });
+
+        if (!bestPick) {
+           let maxProb = 0;
+           Object.keys(predictions).forEach(outcome => {
+               if(predictions[outcome] > maxProb) {
+                   maxProb = predictions[outcome];
+                   bestPick = outcome;
+               }
+           });
+           highestConfidence = maxProb;
+        }
+
+        return { ...match, predictions, bestPick, confidence: highestConfidence };
+      });
+
+      setUpcomingMatches(analyzedData);
+      setAnalyzed(true);
+      setIsAnalyzing(false);
+    }, 1500);
+  };
+
+  // --- Okos Szelvény (csak a jövőbeli meccsekből) ---
+  const generateSmartSlip = () => {
+    if (!analyzed) return;
+
+    const bestBets = [...upcomingMatches]
+      .filter(m => m.bestPick)
+      .sort((a, b) => {
+          const scoreA = a.confidence * a.odds[a.bestPick];
+          const scoreB = b.confidence * b.odds[b.bestPick];
+          return scoreB - scoreA; 
+      })
+      .slice(0, 3);
+
+    const newSlip = bestBets.map(m => ({
+      matchId: m.id,
+      matchName: `${m.home} vs ${m.away}`,
+      selection: m.bestPick,
+      odds: m.odds[m.bestPick],
+      time: m.time
+    }));
+
+    setSlip(newSlip);
+  };
+
+  const toggleBet = (match, selection, odds) => {
+    if (!odds) return;
+    
+    setSlip(prev => {
+      const existingBetIndex = prev.findIndex(bet => bet.matchId === match.id);
+      
+      if (existingBetIndex >= 0 && prev[existingBetIndex].selection === selection) {
+        return prev.filter((_, i) => i !== existingBetIndex);
+      }
+      
+      const newBet = { matchId: match.id, matchName: `${match.home} vs ${match.away}`, selection, odds, time: match.time };
+      if (existingBetIndex >= 0) {
+        const newSlip = [...prev];
+        newSlip[existingBetIndex] = newBet;
+        return newSlip;
+      }
+      
+      return [...prev, newBet];
+    });
+  };
+
+  const removeBet = (matchId) => {
+    setSlip(prev => prev.filter(bet => bet.matchId !== matchId));
+  };
+
+  const clearSlip = () => setSlip([]);
+
+  const totalOdds = slip.reduce((acc, bet) => acc * bet.odds, 1).toFixed(2);
+  const potentialWin = (stake * totalOdds).toFixed(2);
+
+  // Idő formázó (HH:MM:SS)
+  const formatTime = (date) => {
+    return date.toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  // --- Gemini API Integráció ---
+  const fetchGemini = async (prompt) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      systemInstruction: { parts: [{ text: "You are an expert sports betting analyst. Keep your answers concise, engaging, and under 3 sentences. Provide tactical insights, historical context, or risk analysis." }] }
+    };
+
+    const delay = (ms) => new Promise(res => setTimeout(res, ms));
+    const delays = [1000, 2000, 4000, 8000, 16000]; // Exponential backoff
+
+    for (let i = 0; i < 6; i++) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "No insight available at the moment.";
+      } catch (error) {
+        if (i === 5) return "Failed to connect to AI after multiple attempts. Please try again later.";
+        await delay(delays[i]);
+      }
+    }
+  };
+
+  const getMatchInsight = async (match) => {
+    setInsightLoading(prev => ({ ...prev, [match.id]: true }));
+    const prompt = `Give a brief sports betting insight for the upcoming ${match.sport} match between ${match.home} and ${match.away} in the ${match.league}. Mention a key factor that could decide the game.`;
+    const text = await fetchGemini(prompt);
+    setInsights(prev => ({ ...prev, [match.id]: text }));
+    setInsightLoading(prev => ({ ...prev, [match.id]: false }));
+  };
+
+  const reviewSlip = async () => {
+    if (slip.length === 0) return;
+    setIsReviewingSlip(true);
+    const slipDetails = slip.map(b => `${b.matchName} (Pick: ${b.selection}, Odds: ${b.odds})`).join(', ');
+    const prompt = `Review this betting slip: ${slipDetails}. Total odds: ${totalOdds}. Is this a smart play, a value bet, or a risky accumulator? Give a fun, expert analysis of my chances in 2-3 sentences max.`;
+    const text = await fetchGemini(prompt);
+    setSlipReview(text);
+    setIsReviewingSlip(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans p-4 md:p-8">
+      
+      <header className="max-w-7xl mx-auto mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-3 rounded-xl shadow-lg shadow-blue-600/20">
+            <Activity className="text-white w-8 h-8" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-white tracking-tight">Bet Analyzer <span className="text-blue-400">Pro</span></h1>
+            <div className="text-slate-400 text-sm flex items-center gap-4 mt-1">
+              <span className="flex items-center gap-1 text-slate-300 bg-slate-800 px-2 py-1 rounded font-mono">
+                <Clock className="w-3 h-3 text-blue-400" />
+                {formatTime(currentTime)}
+              </span>
+              <span>Available fixtures only</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 w-full md:w-auto">
+          <button 
+            onClick={fetchMatches}
+            disabled={isLoading || isAnalyzing}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-3 rounded-lg font-medium transition-all border border-slate-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+
+          <button 
+            onClick={analyzeMatches}
+            disabled={isAnalyzing || isLoading || upcomingMatches.length === 0}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-medium transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50"
+          >
+            {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Database className="w-5 h-5" />}
+            {isAnalyzing ? 'Analyzing...' : 'Run Analysis'}
+          </button>
+          
+          <button 
+            onClick={generateSmartSlip}
+            disabled={!analyzed || isAnalyzing || upcomingMatches.length === 0}
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg font-medium transition-all shadow-lg shadow-green-600/20 disabled:opacity-50 disabled:shadow-none"
+          >
+            <Zap className="w-5 h-5" />
+            Smart Slip
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+        
+        <div className="lg:col-span-2 space-y-4">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-xl font-semibold flex items-center gap-2">
+              <TrendingUp className="text-blue-400 w-5 h-5" /> Upcoming Fixtures
+            </h2>
+            <span className="text-sm text-slate-500">
+              Matches starting after {formatTime(currentTime)}
+            </span>
+          </div>
+
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 bg-slate-900 rounded-xl border border-slate-800">
+              <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+              <p className="text-slate-400">Loading upcoming matches...</p>
+            </div>
+          ) : upcomingMatches.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 bg-slate-900/50 rounded-xl border border-slate-800 border-dashed">
+              <Clock className="w-12 h-12 text-slate-600 mb-4" />
+              <p className="text-slate-400 text-lg">No more matches available today.</p>
+              <p className="text-slate-500 text-sm">All fixtures in the database have already started or ended.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {upcomingMatches.map((match) => {
+                // Calculate time remaining (basic formatting)
+                const msDiff = match.matchDate - currentTime;
+                const hoursLeft = Math.floor(msDiff / (1000 * 60 * 60));
+                const minsLeft = Math.floor((msDiff % (1000 * 60 * 60)) / (1000 * 60));
+                const isStartingSoon = hoursLeft === 0 && minsLeft < 60;
+
+                return (
+                  <div key={match.id} className={`bg-slate-900 border ${isStartingSoon ? 'border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.1)]' : 'border-slate-800'} rounded-xl p-4 hover:border-slate-700 transition-all`}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-medium px-2 py-1 bg-slate-800 text-slate-300 rounded-md">
+                            {match.sport} • {match.league}
+                          </span>
+                          {isStartingSoon && (
+                            <span className="text-[10px] uppercase font-bold px-2 py-1 bg-yellow-500/20 text-yellow-500 rounded flex items-center gap-1 animate-pulse">
+                              <Clock className="w-3 h-3" /> Starting soon
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="font-bold text-lg text-white">{match.home} vs {match.away}</h3>
+                        <p className={`text-sm ${isStartingSoon ? 'text-yellow-400 font-medium' : 'text-slate-400'}`}>
+                          Kickoff: {match.time} ({hoursLeft}h {minsLeft}m left)
+                        </p>
+                      </div>
+                      
+                      {analyzed && match.bestPick && (
+                        <div className="flex flex-col items-end">
+                          <span className="text-xs text-slate-400 mb-1">AI Recommendation</span>
+                          <div className="bg-blue-500/10 border border-blue-500/30 text-blue-400 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4" />
+                            Pick: {match.bestPick} ({match.confidence}%)
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {['1', 'X', '2'].map((outcome) => {
+                        if (!match.odds[outcome]) return <div key={outcome} className="hidden sm:block"></div>;
+                        
+                        const isSelected = slip.some(b => b.matchId === match.id && b.selection === outcome);
+                        const isRecommended = analyzed && match.bestPick === outcome;
+                        
+                        return (
+                          <button
+                            key={outcome}
+                            onClick={() => toggleBet(match, outcome, match.odds[outcome])}
+                            className={`
+                              relative p-3 rounded-lg border text-center transition-all flex flex-col items-center justify-center overflow-hidden
+                              ${isSelected 
+                                ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
+                                : 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200'}
+                              ${isRecommended && !isSelected ? 'ring-1 ring-blue-500/50' : ''}
+                            `}
+                          >
+                            {isRecommended && !isSelected && (
+                               <div className="absolute inset-0 bg-blue-500/5 pointer-events-none"></div>
+                            )}
+
+                            <span className="text-xs text-slate-400 mb-1 font-medium relative z-10">Outcome: {outcome}</span>
+                            <span className="font-bold text-lg relative z-10">{match.odds[outcome].toFixed(2)}</span>
+                            
+                            {analyzed && (
+                              <div className={`mt-2 text-xs w-full bg-slate-900/80 rounded p-1 relative z-10 ${isRecommended ? 'text-blue-400 font-bold' : 'text-slate-500'}`}>
+                                {match.predictions?.[outcome] || 0}% prob.
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* AI Insight Section */}
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                      {!insights[match.id] && !insightLoading[match.id] ? (
+                        <button 
+                          onClick={() => getMatchInsight(match)}
+                          className="text-sm flex items-center gap-2 text-purple-400 hover:text-purple-300 transition-colors bg-purple-500/10 hover:bg-purple-500/20 px-3 py-1.5 rounded-lg border border-purple-500/20 w-full justify-center"
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          ✨ Get AI Match Insight
+                        </button>
+                      ) : insightLoading[match.id] ? (
+                        <div className="flex items-center justify-center gap-2 text-purple-400 text-sm py-1.5">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Analyzing matchup...
+                        </div>
+                      ) : (
+                        <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-3 relative">
+                          <div className="flex items-center gap-2 text-purple-400 mb-1 font-semibold text-xs uppercase tracking-wider">
+                            <Sparkles className="w-3 h-3" /> AI Insight
+                          </div>
+                          <p className="text-slate-300 text-sm leading-relaxed">{insights[match.id]}</p>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="lg:col-span-1">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 sticky top-8 shadow-2xl shadow-black/50">
+            <div className="flex items-center justify-between mb-6 border-b border-slate-800 pb-4">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <DollarSign className="text-blue-400" /> My Bet Slip
+              </h2>
+              {slip.length > 0 && (
+                <button onClick={clearSlip} className="text-slate-400 hover:text-red-400 transition-colors p-1" title="Clear slip">
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            {slip.length === 0 ? (
+              <div className="text-center py-10 text-slate-500 flex flex-col items-center">
+                <Trophy className="w-12 h-12 mb-3 opacity-20" />
+                <p>Your slip is empty.</p>
+                <p className="text-sm mt-1">Click on the odds to add bets!</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="max-h-[400px] overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                  {slip.map((bet, index) => (
+                    <div key={index} className="bg-slate-800 rounded-lg p-3 relative group border border-slate-700/50 hover:border-slate-600 transition-colors">
+                      <button 
+                        onClick={() => removeBet(bet.matchId)}
+                        className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-400 transition-opacity bg-slate-900/80 rounded-full p-1"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <p className="text-sm font-semibold text-white pr-6 leading-tight">{bet.matchName}</p>
+                      <div className="flex justify-between items-center mt-3">
+                        <div className="flex gap-2">
+                          <span className="text-[10px] bg-slate-950 border border-slate-700 px-1.5 py-0.5 rounded text-slate-400 flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5" /> {bet.time}
+                          </span>
+                          <span className="text-[10px] bg-blue-500/20 border border-blue-500/30 px-1.5 py-0.5 rounded text-blue-400 font-medium">
+                            Pick: {bet.selection}
+                          </span>
+                        </div>
+                        <span className="font-bold text-white">{bet.odds.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t border-slate-800 pt-4 mt-4 space-y-4 bg-slate-900">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-slate-400">Total Odds:</span>
+                    <span className="font-bold text-xl text-white">{slip.length > 0 ? totalOdds : '0.00'}</span>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Stake:</label>
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={stake}
+                        onChange={(e) => setStake(Number(e.target.value))}
+                        className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-2 pl-8 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                        min="1"
+                        step="1"
+                      />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/10 border border-blue-500/30 rounded-lg p-4 flex flex-col items-center justify-center">
+                    <span className="text-sm text-blue-400 font-medium mb-1">Potential Return</span>
+                    <span className="text-3xl font-black text-white tracking-tight">${potentialWin}</span>
+                  </div>
+
+                  {slipReview ? (
+                    <div className="bg-purple-900/20 border border-purple-500/30 rounded-lg p-3 text-sm">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-purple-400 font-semibold">
+                          <Sparkles className="w-4 h-4" /> AI Slip Analysis
+                        </div>
+                        <button onClick={() => setSlipReview('')} className="text-slate-500 hover:text-slate-300">
+                          <RefreshCw className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <p className="text-slate-300 italic">{slipReview}</p>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={reviewSlip}
+                      disabled={isReviewingSlip || slip.length === 0}
+                      className="w-full bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 border border-purple-500/30 font-medium py-2 rounded-lg transition-all flex justify-center items-center gap-2 disabled:opacity-50"
+                    >
+                      {isReviewingSlip ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      ✨ Review Slip with AI
+                    </button>
+                  )}
+
+                  <button className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg shadow-lg shadow-blue-600/20 transition-all active:scale-[0.98] flex justify-center items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Save & Export
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </main>
+      
+      <style dangerouslySetInnerHTML={{__html: `
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+      `}} />
+    </div>
+  );
+}
